@@ -99,7 +99,13 @@ void bind_UnitreeController(py::module_& m) {
         .def("set_gains", &UnitreeController::set_gains, py::arg("stiffness"), py::arg("damping"))
         .def("shutdown", &UnitreeController::shutdown)
         .def("get_robot_state", &UnitreeController::get_robot_state)
-        .def("get_sport_state", &UnitreeController::get_sport_state);
+        .def("get_sport_state", &UnitreeController::get_sport_state)
+        .def("get_last_lowstate_tick", &UnitreeController::GetLastLowstateTick)
+        .def("set_safety_abort", &UnitreeController::SetSafetyAbort)
+        .def("get_safety_abort", &UnitreeController::GetSafetyAbort)
+        .def("motion_switcher_release_until_clear", &UnitreeController::MotionSwitcherReleaseUntilClear)
+        .def("motion_switcher_select_mode", &UnitreeController::MotionSwitcherSelectMode, py::arg("name_or_alias"))
+        .def("motion_switcher_check_mode", &UnitreeController::MotionSwitcherCheckMode);
 }
 
 PYBIND11_MODULE(unitree_cpp, m) {

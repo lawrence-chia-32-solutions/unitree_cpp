@@ -11,6 +11,7 @@
 #include <vector>
 #include <array>
 #include <cstddef>
+#include <atomic>
 
 // DDS
 #include <unitree/robot/channel/channel_publisher.hpp>
@@ -162,6 +163,19 @@ class UnitreeController {
     RobotState get_robot_state();
     SportState get_sport_state();
 
+    uint32_t GetLastLowstateTick() const { return last_lowstate_tick_.load(); }
+
+    void SetSafetyAbort(bool v) { safety_abort_.store(v); }
+    bool GetSafetyAbort() const { return safety_abort_.load(); }
+
+    /// Release active motion modes until none (same as constructor loop).
+    void MotionSwitcherReleaseUntilClear();
+
+    /// @return SDK return code (0 = OK).
+    int32_t MotionSwitcherSelectMode(const std::string& name_or_alias);
+
+    std::pair<std::string, std::string> MotionSwitcherCheckMode();
+
    private:
     UnitreeConfig cfg_;
 
@@ -198,6 +212,15 @@ class UnitreeController {
     ThreadPtr handcmd_writer_ptr_;
 
     std::shared_ptr<unitree::robot::b2::MotionSwitcherClient> msc_;
+
+    std::atomic<uint32_t> last_lowstate_tick_{0};
+    std::atomic<bool> safety_abort_{false};
+
+    std::vector<float> prev_cmd_q_target_;
+    bool has_prev_cmd_q_ = false;
+
+    static constexpr float kClampQAbs_ = 3.5f;
+    static constexpr float kRateLimitQRad_ = 0.45f;
 
     void LowStateHandler(const void* message);
     void SportStateHandler(const void* message);

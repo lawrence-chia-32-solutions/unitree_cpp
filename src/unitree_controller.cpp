@@ -1,7 +1,10 @@
 #include "unitree_controller.hpp"
+#include "terminations.hpp"
 #include <stdexcept>
 #include <cstddef>
 #include <iostream>
+#include <utility>
+#include <unistd.h>
 
 using std::size_t;
 
@@ -42,6 +45,7 @@ UnitreeController::UnitreeController(const UnitreeConfig& cfg)
     } else {
         throw std::runtime_error("Unsupported hand type: " + cfg.hand_type);
     }
+    prev_cmd_q_target_.assign(num_dofs_, 0.0f);
     std::cout << cfg.hand_type << " hand with " << num_dofs_hand_ << " DOFs." << std::endl;
 
     ChannelFactory::Instance()->Init(0, cfg_.net_if);
@@ -158,6 +162,7 @@ void UnitreeController::LowStateHandler(const void* message) {
     // std::cout << "imu rpy: " << imu_tmp.rpy[0] << ", " << imu_tmp.rpy[1] << ", " << imu_tmp.rpy[2] << std::endl;
 
     robot_state_buffer_.SetData(robot_state_tmp);
+    last_lowstate_tick_.store(robot_state_tmp.tick);
 
     // update mode machine
     if (mode_machine_ != low_state.mode_machine()) {
@@ -181,21 +186,44 @@ void UnitreeController::LowCommandWriter() {
     dds_low_command.mode_pr() = static_cast<uint8_t>(mode_pr_);
     dds_low_command.mode_machine() = mode_machine_;
 
-    const std::shared_ptr<const MotorCommand> mc = motor_command_buffer_.GetData();
-    if (mc) {
-        // std::cout << "LowCommandWriter called with motor command data." << std::endl;
-        for (size_t i = 0; i < num_dofs_; i++) {
-            dds_low_command.motor_cmd().at(i).mode() = 1;  // 1:Enable, 0:Disable
-            dds_low_command.motor_cmd().at(i).tau() = mc->tau_ff.at(i);
-            dds_low_command.motor_cmd().at(i).q() = mc->q_target.at(i);
-            dds_low_command.motor_cmd().at(i).dq() = mc->dq_target.at(i);
-            dds_low_command.motor_cmd().at(i).kp() = mc->kp.at(i);
-            dds_low_command.motor_cmd().at(i).kd() = mc->kd.at(i);
-        }
+    MotorCommand out_mc(num_dofs_);
+    bool have = false;
 
-        dds_low_command.crc() = Crc32Core((uint32_t*)&dds_low_command, (sizeof(dds_low_command) >> 2) - 1);
-        lowcmd_publisher_->Write(dds_low_command);
+    if (safety_abort_.load()) {
+        auto rs = robot_state_buffer_.GetData();
+        if (rs && rs->tick > 0) {
+            for (size_t i = 0; i < num_dofs_; i++) {
+                out_mc.kp.at(i) = static_cast<float>(stiffness_[i] * 0.08);
+                out_mc.kd.at(i) = static_cast<float>(damping_[i] * 1.2);
+                out_mc.q_target.at(i) = rs->motor_state.q.at(i);
+                out_mc.dq_target.at(i) = 0.0f;
+                out_mc.tau_ff.at(i) = 0.0f;
+            }
+            have = true;
+        }
+    } else {
+        const std::shared_ptr<const MotorCommand> mc = motor_command_buffer_.GetData();
+        if (mc) {
+            out_mc = *mc;
+            have = true;
+        }
     }
+
+    if (!have) {
+        return;
+    }
+
+    for (size_t i = 0; i < num_dofs_; i++) {
+        dds_low_command.motor_cmd().at(i).mode() = 1;  // 1:Enable, 0:Disable
+        dds_low_command.motor_cmd().at(i).tau() = out_mc.tau_ff.at(i);
+        dds_low_command.motor_cmd().at(i).q() = out_mc.q_target.at(i);
+        dds_low_command.motor_cmd().at(i).dq() = out_mc.dq_target.at(i);
+        dds_low_command.motor_cmd().at(i).kp() = out_mc.kp.at(i);
+        dds_low_command.motor_cmd().at(i).kd() = out_mc.kd.at(i);
+    }
+
+    dds_low_command.crc() = Crc32Core((uint32_t*)&dds_low_command, (sizeof(dds_low_command) >> 2) - 1);
+    lowcmd_publisher_->Write(dds_low_command);
 }
 
 void UnitreeController::HandCommandWriter() {
@@ -247,21 +275,25 @@ void UnitreeController::step(const std::vector<double>& actions) {
         motor_command_tmp.kd.at(i) = damping_[i];
         switch (cfg_.control_mode) {
             case ControlMode::POSITION:
-                motor_command_tmp.q_target.at(i) = actions[i];
+                motor_command_tmp.q_target.at(i) = static_cast<float>(actions[i]);
                 break;
             case ControlMode::VELOCITY:
-                motor_command_tmp.dq_target.at(i) = actions[i];
+                motor_command_tmp.dq_target.at(i) = static_cast<float>(actions[i]);
                 break;
             case ControlMode::TORQUE:
-                motor_command_tmp.tau_ff.at(i) = actions[i];
+                motor_command_tmp.tau_ff.at(i) = static_cast<float>(actions[i]);
                 break;
             default:
                 throw std::runtime_error("Unknown control mode");
         }
-
-        // motor_command_tmp.q_target.at(i) = 0.0;
-        // motor_command_tmp.dq_target.at(i) = 0.0;
-        // motor_command_tmp.tau_ff.at(i) = 0.0;
+    }
+    if (cfg_.control_mode == ControlMode::POSITION) {
+        unitree_bridge::ClampPositionTargets(motor_command_tmp.q_target, -kClampQAbs_, kClampQAbs_);
+        if (has_prev_cmd_q_) {
+            unitree_bridge::RateLimitPosition(motor_command_tmp.q_target, prev_cmd_q_target_, kRateLimitQRad_);
+        }
+        prev_cmd_q_target_ = motor_command_tmp.q_target;
+        has_prev_cmd_q_ = true;
     }
     motor_command_buffer_.SetData(motor_command_tmp);
     LowCommandWriter(); // immediately send command
@@ -337,6 +369,25 @@ SportState UnitreeController::get_sport_state() {
     } else {
         throw std::runtime_error("Sport state data is not available");
     }
+}
+
+void UnitreeController::MotionSwitcherReleaseUntilClear() {
+    std::string form, name;
+    while (msc_->CheckMode(form, name), !name.empty()) {
+        if (msc_->ReleaseMode())
+            std::cout << "Failed to switch to Release Mode\n";
+        sleep(1);
+    }
+}
+
+int32_t UnitreeController::MotionSwitcherSelectMode(const std::string& name_or_alias) {
+    return msc_->SelectMode(name_or_alias);
+}
+
+std::pair<std::string, std::string> UnitreeController::MotionSwitcherCheckMode() {
+    std::string form, name;
+    msc_->CheckMode(form, name);
+    return std::make_pair(form, name);
 }
 
 int main(int argc, char const* argv[]) {
