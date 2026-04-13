@@ -220,7 +220,10 @@ class UnitreeController {
     bool has_prev_cmd_q_ = false;
 
     static constexpr float kClampQAbs_ = 3.5f;
-    static constexpr float kRateLimitQRad_ = 0.45f;
+    // Max delta (rad) per lowcmd tick vs previous q_target. 0.45 rad was too small for BeyondMimic
+    // stand-up segments (policy + PD wanted faster joint motion; bridge clipped → hunting / shaking).
+    // Tune startup_recovery stiffness/damping first; this is the hardware ceiling for step size.
+    static constexpr float kRateLimitQRad_ = 0.70f;
 
     void LowStateHandler(const void* message);
     void SportStateHandler(const void* message);
