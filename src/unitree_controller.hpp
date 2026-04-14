@@ -153,10 +153,10 @@ struct UnitreeConfig {
     /// Too small for BeyondMimic / fast clips: commanded q chases policy targets → hunting / mechanical jerk.
     float max_q_delta_rad = 0.70f;
 
-    /// If true, a background thread republishes ``motor_command_buffer_`` at ``control_dt`` in addition to
-    /// ``step()`` calling ``LowCommandWriter()`` — two publish paths at ~50 Hz (jitter-prone). If false,
-    /// only ``step()`` publishes (matches the Python pipeline tick).
-    bool recurrent_lowcmd_writer = false;
+    /// If true (default), a background thread republishes ``motor_command_buffer_`` at ``control_dt`` in
+    /// addition to ``step()`` calling ``LowCommandWriter()``. Some setups need this for stable comms; set
+    /// false only if you verified behaviour (e.g. duplicate sends and jitter experiments).
+    bool recurrent_lowcmd_writer = true;
 };
 
 class UnitreeController {
@@ -169,7 +169,7 @@ class UnitreeController {
     void set_gains(const std::vector<double>& stiffness, const std::vector<double>& damping);
     void shutdown();
 
-    /// Clear position ``q`` rate-limit memory (call after large policy / gain switches).
+    /// Re-seed position rate limiter from current motor ``q`` (use after policy / PD gain switches).
     void ResetPositionRateLimiter();
 
     RobotState get_robot_state();

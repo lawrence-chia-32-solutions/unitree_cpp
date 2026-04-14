@@ -10,5 +10,5 @@
     - this bug could lead to jittering and stability issue, see https://github.com/GDDG08/RoboJuDo/issues/2
 
 ### 1.0.4
-- `UnitreeConfig::recurrent_lowcmd_writer` (default **false**): when **false**, only `step()` publishes `LowCmd` (Python tick); avoids duplicate ~50 Hz DDS sends from the recurrent thread + `step()` (can reduce mechanical jitter).
-- `UnitreeConfig::max_q_delta_rad` configurable; `ResetPositionRateLimiter()` clears position rate-limit state.
+- `UnitreeConfig::recurrent_lowcmd_writer` (default **true**): optional; set **false** to publish `LowCmd` only from `step()` (test on your hardware first).
+- `UnitreeConfig::max_q_delta_rad` configurable; `ResetPositionRateLimiter()` re-seeds the rate limiter from **current** motor `q` (never clears — clearing caused one unbounded step after policy switch).

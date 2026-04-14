@@ -19,7 +19,7 @@ bool dict_get_recurrent_lowcmd_writer(const py::dict& cfg_dict) {
     if (cfg_dict.contains("recurrent_lowcmd_writer")) {
         return cfg_dict["recurrent_lowcmd_writer"].cast<bool>();
     }
-    return false;
+    return true;
 }
 
 }  // namespace

@@ -83,8 +83,8 @@ UnitreeController::UnitreeController(const UnitreeConfig& cfg)
     // unitree_hg::msg::dds_::HandState_ state;
     // handstate_subscriber.reset(new unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::HandState_>(sub_namespace));
 
-    // Optional periodic lowcmd writer. When true, duplicates step()'s LowCommandWriter() at control_dt.
-    // Python-driven pipelines should set recurrent_lowcmd_writer=false to publish only from step().
+    // Default on: periodic republish at control_dt (same as step() on ~50 Hz Python loops).
+    // Set recurrent_lowcmd_writer=false only after hardware testing (some builds rely on this feed).
     if (cfg_.recurrent_lowcmd_writer) {
         command_writer_ptr_ =
             CreateRecurrentThreadEx("command_writer", UT_CPU_ID_NONE, uint(cfg.control_dt * 1e6),
@@ -104,7 +104,18 @@ UnitreeController::~UnitreeController() {
 }
 
 void UnitreeController::ResetPositionRateLimiter() {
-    has_prev_cmd_q_ = false;
+    // Seed from measured q so the next step() still rate-limits vs *actual* posture.
+    // Clearing has_prev_cmd_q_ caused the next step to skip RateLimitPosition() entirely →
+    // one huge q jump → collapse after policy switch.
+    const std::shared_ptr<const RobotState> rs = robot_state_buffer_.GetData();
+    if (rs && rs->tick > 0) {
+        for (size_t i = 0; i < num_dofs_; i++) {
+            prev_cmd_q_target_[i] = rs->motor_state.q.at(i);
+        }
+        has_prev_cmd_q_ = true;
+    } else {
+        has_prev_cmd_q_ = false;
+    }
 }
 
 bool UnitreeController::self_check() {
