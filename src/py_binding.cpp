@@ -6,6 +6,17 @@
 
 namespace py = pybind11;
 
+namespace {
+
+float dict_get_max_q_delta_rad(const py::dict& cfg_dict) {
+    if (cfg_dict.contains("max_q_delta_rad")) {
+        return cfg_dict["max_q_delta_rad"].cast<float>();
+    }
+    return 0.70f;
+}
+
+}  // namespace
+
 void bind_UnitreeConfig(py::module_& m) {
     py::class_<UnitreeConfig>(m, "UnitreeConfig")
         .def(py::init<>())
@@ -20,7 +31,8 @@ void bind_UnitreeConfig(py::module_& m) {
         .def_readwrite("sport_state_topic", &UnitreeConfig::sport_state_topic)
         .def_readwrite("stiffness", &UnitreeConfig::stiffness)
         .def_readwrite("damping", &UnitreeConfig::damping)
-        .def_readwrite("num_dofs", &UnitreeConfig::num_dofs);
+        .def_readwrite("num_dofs", &UnitreeConfig::num_dofs)
+        .def_readwrite("max_q_delta_rad", &UnitreeConfig::max_q_delta_rad);
 }
 
 void bind_RobotState(py::module_& m) {
@@ -79,6 +91,7 @@ void bind_UnitreeController(py::module_& m) {
             cfg.stiffness = cfg_dict["stiffness"].cast<std::vector<double>>();
             cfg.damping = cfg_dict["damping"].cast<std::vector<double>>();
             cfg.num_dofs = cfg_dict["num_dofs"].cast<unsigned short>();
+            cfg.max_q_delta_rad = dict_get_max_q_delta_rad(cfg_dict);
 
             std::string mode_str = cfg_dict["control_mode"].cast<std::string>();
             if (mode_str == "position")

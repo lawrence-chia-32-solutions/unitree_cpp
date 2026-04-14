@@ -290,7 +290,8 @@ void UnitreeController::step(const std::vector<double>& actions) {
     if (cfg_.control_mode == ControlMode::POSITION) {
         unitree_bridge::ClampPositionTargets(motor_command_tmp.q_target, -kClampQAbs_, kClampQAbs_);
         if (has_prev_cmd_q_) {
-            unitree_bridge::RateLimitPosition(motor_command_tmp.q_target, prev_cmd_q_target_, kRateLimitQRad_);
+            unitree_bridge::RateLimitPosition(
+                motor_command_tmp.q_target, prev_cmd_q_target_, cfg_.max_q_delta_rad);
         }
         prev_cmd_q_target_ = motor_command_tmp.q_target;
         has_prev_cmd_q_ = true;

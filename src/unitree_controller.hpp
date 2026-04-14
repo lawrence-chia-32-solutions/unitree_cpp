@@ -148,6 +148,10 @@ struct UnitreeConfig {
     std::vector<double> stiffness;
     std::vector<double> damping;
     unsigned short num_dofs;
+
+    /// Max delta q (rad) per step() vs previous commanded q (position mode).
+    /// Too small for BeyondMimic / fast clips: commanded q chases policy targets → hunting / mechanical jerk.
+    float max_q_delta_rad = 0.70f;
 };
 
 class UnitreeController {
@@ -220,10 +224,6 @@ class UnitreeController {
     bool has_prev_cmd_q_ = false;
 
     static constexpr float kClampQAbs_ = 3.5f;
-    // Max delta (rad) per lowcmd tick vs previous q_target. 0.45 rad was too small for BeyondMimic
-    // stand-up segments (policy + PD wanted faster joint motion; bridge clipped → hunting / shaking).
-    // Tune startup_recovery stiffness/damping first; this is the hardware ceiling for step size.
-    static constexpr float kRateLimitQRad_ = 0.70f;
 
     void LowStateHandler(const void* message);
     void SportStateHandler(const void* message);
