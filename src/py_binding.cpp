@@ -15,6 +15,13 @@ float dict_get_max_q_delta_rad(const py::dict& cfg_dict) {
     return 0.70f;
 }
 
+bool dict_get_recurrent_lowcmd_writer(const py::dict& cfg_dict) {
+    if (cfg_dict.contains("recurrent_lowcmd_writer")) {
+        return cfg_dict["recurrent_lowcmd_writer"].cast<bool>();
+    }
+    return false;
+}
+
 }  // namespace
 
 void bind_UnitreeConfig(py::module_& m) {
@@ -32,7 +39,8 @@ void bind_UnitreeConfig(py::module_& m) {
         .def_readwrite("stiffness", &UnitreeConfig::stiffness)
         .def_readwrite("damping", &UnitreeConfig::damping)
         .def_readwrite("num_dofs", &UnitreeConfig::num_dofs)
-        .def_readwrite("max_q_delta_rad", &UnitreeConfig::max_q_delta_rad);
+        .def_readwrite("max_q_delta_rad", &UnitreeConfig::max_q_delta_rad)
+        .def_readwrite("recurrent_lowcmd_writer", &UnitreeConfig::recurrent_lowcmd_writer);
 }
 
 void bind_RobotState(py::module_& m) {
@@ -92,6 +100,7 @@ void bind_UnitreeController(py::module_& m) {
             cfg.damping = cfg_dict["damping"].cast<std::vector<double>>();
             cfg.num_dofs = cfg_dict["num_dofs"].cast<unsigned short>();
             cfg.max_q_delta_rad = dict_get_max_q_delta_rad(cfg_dict);
+            cfg.recurrent_lowcmd_writer = dict_get_recurrent_lowcmd_writer(cfg_dict);
 
             std::string mode_str = cfg_dict["control_mode"].cast<std::string>();
             if (mode_str == "position")
@@ -110,6 +119,7 @@ void bind_UnitreeController(py::module_& m) {
         .def("step", &UnitreeController::step, py::arg("actions"))
         .def("step_hands", &UnitreeController::step_hands, py::arg("l_hand_pose"), py::arg("r_hand_pose"))
         .def("set_gains", &UnitreeController::set_gains, py::arg("stiffness"), py::arg("damping"))
+        .def("reset_position_rate_limiter", &UnitreeController::ResetPositionRateLimiter)
         .def("shutdown", &UnitreeController::shutdown)
         .def("get_robot_state", &UnitreeController::get_robot_state)
         .def("get_sport_state", &UnitreeController::get_sport_state)

@@ -83,8 +83,13 @@ UnitreeController::UnitreeController(const UnitreeConfig& cfg)
     // unitree_hg::msg::dds_::HandState_ state;
     // handstate_subscriber.reset(new unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::HandState_>(sub_namespace));
 
-    // create threads
-    command_writer_ptr_ = CreateRecurrentThreadEx("command_writer", UT_CPU_ID_NONE, uint(cfg.control_dt * 1e6), &UnitreeController::LowCommandWriter, this);
+    // Optional periodic lowcmd writer. When true, duplicates step()'s LowCommandWriter() at control_dt.
+    // Python-driven pipelines should set recurrent_lowcmd_writer=false to publish only from step().
+    if (cfg_.recurrent_lowcmd_writer) {
+        command_writer_ptr_ =
+            CreateRecurrentThreadEx("command_writer", UT_CPU_ID_NONE, uint(cfg.control_dt * 1e6),
+                                    &UnitreeController::LowCommandWriter, this);
+    }
 
     handcmd_left_publisher_.reset(new ChannelPublisher<HandCmd_>("rt/dex3/left/cmd"));
     handcmd_left_publisher_->InitChannel();
@@ -96,6 +101,10 @@ UnitreeController::UnitreeController(const UnitreeConfig& cfg)
 }
 
 UnitreeController::~UnitreeController() {
+}
+
+void UnitreeController::ResetPositionRateLimiter() {
+    has_prev_cmd_q_ = false;
 }
 
 bool UnitreeController::self_check() {

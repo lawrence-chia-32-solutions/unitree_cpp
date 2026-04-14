@@ -152,6 +152,11 @@ struct UnitreeConfig {
     /// Max delta q (rad) per step() vs previous commanded q (position mode).
     /// Too small for BeyondMimic / fast clips: commanded q chases policy targets → hunting / mechanical jerk.
     float max_q_delta_rad = 0.70f;
+
+    /// If true, a background thread republishes ``motor_command_buffer_`` at ``control_dt`` in addition to
+    /// ``step()`` calling ``LowCommandWriter()`` — two publish paths at ~50 Hz (jitter-prone). If false,
+    /// only ``step()`` publishes (matches the Python pipeline tick).
+    bool recurrent_lowcmd_writer = false;
 };
 
 class UnitreeController {
@@ -163,6 +168,9 @@ class UnitreeController {
     void step_hands(const std::vector<double>& l_hand_pose, const std::vector<double>& r_hand_pose);
     void set_gains(const std::vector<double>& stiffness, const std::vector<double>& damping);
     void shutdown();
+
+    /// Clear position ``q`` rate-limit memory (call after large policy / gain switches).
+    void ResetPositionRateLimiter();
 
     RobotState get_robot_state();
     SportState get_sport_state();
