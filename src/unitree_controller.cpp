@@ -125,7 +125,7 @@ bool UnitreeController::self_check() {
     }
     try {
         RobotState robot_state = get_robot_state();
-        if (robot_state.tick == 0) {
+        if (robot_state.tick == 0 || last_lowstate_tick_.load() == 0) {
             std::cerr << "Robot state tick is zero, no data received." << std::endl;
             return false;
         }
@@ -358,8 +358,28 @@ void UnitreeController::set_gains(const std::vector<double>& stiffness, const st
 
 void UnitreeController::shutdown() {
     std::cout << "Shutting down UnitreeController..." << std::endl;
+    safety_abort_.store(true);
+
+    // Hold measured posture briefly so the robot does not snap toward zero when killing.
+    const std::shared_ptr<const RobotState> rs = robot_state_buffer_.GetData();
+    std::vector<double> q_hold(num_dofs_, 0.0);
+    if (rs && rs->tick > 0) {
+        for (size_t i = 0; i < num_dofs_; i++) {
+            q_hold[i] = rs->motor_state.q.at(i);
+        }
+    }
+
     set_gains(std::vector<double>(num_dofs_, 0.0), std::vector<double>(num_dofs_, 5.0));
-    step(std::vector<double>(num_dofs_, 0.0));
+    for (int i = 0; i < 5; ++i) {
+        step(q_hold);
+        usleep(20000);  // ~20ms between stop commands
+    }
+
+    // Clear local buffers/tick so a recreated controller must observe fresh lowstate.
+    has_prev_cmd_q_ = false;
+    last_lowstate_tick_.store(0);
+    robot_state_buffer_.Clear();
+    sport_state_buffer_.Clear();
 }
 
 RobotState UnitreeController::get_robot_state() {
