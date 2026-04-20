@@ -151,7 +151,7 @@ struct UnitreeConfig {
 
     /// Max delta q (rad) per step() vs previous commanded q (position mode).
     /// Too small for BeyondMimic / fast clips: commanded q chases policy targets → hunting / mechanical jerk.
-    float max_q_delta_rad = 0.70f;
+    float max_q_delta_rad = 0.45f;
 
     /// If true (default), a background thread republishes ``motor_command_buffer_`` at ``control_dt`` in
     /// addition to ``step()`` calling ``LowCommandWriter()``. Some setups need this for stable comms; set

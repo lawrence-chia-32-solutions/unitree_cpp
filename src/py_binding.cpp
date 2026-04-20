@@ -12,7 +12,7 @@ float dict_get_max_q_delta_rad(const py::dict& cfg_dict) {
     if (cfg_dict.contains("max_q_delta_rad")) {
         return cfg_dict["max_q_delta_rad"].cast<float>();
     }
-    return 0.70f;
+    return 0.45f;
 }
 
 bool dict_get_recurrent_lowcmd_writer(const py::dict& cfg_dict) {
