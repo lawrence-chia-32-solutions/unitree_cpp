@@ -71,6 +71,48 @@ This project supports:
 - **Dex-3 hand**  
 - **Odometry service**  
 
+## LowCmd Trace Logging (for jerk diagnosis)
+
+`UnitreeController` can log every published low-level command (`rt/lowcmd`) and hand command write in JSONL format.
+
+### Enable
+
+```bash
+export UNITREE_CPP_TRACE_ENABLE=1
+export UNITREE_CPP_TRACE_FILE=/tmp/unitree_cpp_lowcmd_trace.jsonl
+export UNITREE_CPP_TRACE_FLUSH=1
+export UNITREE_CPP_TRACE_SAMPLE=1
+```
+
+### Environment variables
+
+- `UNITREE_CPP_TRACE_ENABLE`: `1`/`0` (default `1`)
+- `UNITREE_CPP_TRACE_FILE`: output file path (default `/tmp/unitree_cpp_lowcmd_trace.jsonl`)
+- `UNITREE_CPP_TRACE_FLUSH`: flush after each line (`1` default)
+- `UNITREE_CPP_TRACE_SAMPLE`: log every `N`th command (`1` default means all commands)
+
+### Recorded fields
+
+- `stream`: `lowcmd` or `handcmd`
+- `seq`: per-stream sequence number
+- `mono_us`: monotonic timestamp in microseconds
+- `publish_dt_us`: interval from previous publish on that stream
+- For `lowcmd`: `control_dt_us`, `dt_out_of_band`, `lowstate_tick`, `lowstate_tick_dt`, `mode_pr`, `mode_machine`, `control_mode`, `crc`, full `motors[]` payload (`mode`, `q`, `dq`, `tau`, `kp`, `kd`)
+- For `handcmd`: `side`, full `motors[]` payload
+
+### Quick checks
+
+```bash
+# First lines
+head -n 5 /tmp/unitree_cpp_lowcmd_trace.jsonl
+
+# Distribution of publish period for lowcmd
+jq -r 'select(.stream=="lowcmd") | .publish_dt_us' /tmp/unitree_cpp_lowcmd_trace.jsonl | sort -n | uniq -c
+
+# Commands where timing drifted far from configured control_dt
+jq -c 'select(.stream=="lowcmd" and .dt_out_of_band==true)' /tmp/unitree_cpp_lowcmd_trace.jsonl | head
+```
+
 ## CHANGELOG
 
 **1.0.2**

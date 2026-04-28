@@ -11,6 +11,8 @@
 #include <vector>
 #include <array>
 #include <cstddef>
+#include <atomic>
+#include <fstream>
 
 // DDS
 #include <unitree/robot/channel/channel_publisher.hpp>
@@ -203,4 +205,26 @@ class UnitreeController {
     void SportStateHandler(const void* message);
     void LowCommandWriter();
     void HandCommandWriter();
+    bool IsTraceEnabled() const;
+    void TraceLowCmdPublish(const LowCmd_& cmd, uint64_t now_us, uint64_t dt_us);
+    void TraceHandCmdPublish(const char* side, const HandCmd_& cmd, uint64_t now_us, uint64_t dt_us);
+    uint64_t NowSteadyUs() const;
+    uint64_t NextTraceSeq(std::atomic<uint64_t>& seq);
+    bool ShouldLogBySampling(uint64_t seq) const;
+    void InitTraceLogger();
+    void TraceLine(const std::string& line);
+
+    std::ofstream trace_stream_;
+    std::mutex trace_mutex_;
+    bool trace_enabled_ = true;
+    bool trace_flush_each_write_ = true;
+    uint32_t trace_sampling_ratio_ = 1;
+    std::string trace_file_path_;
+    std::atomic<uint64_t> lowcmd_trace_seq_{0};
+    std::atomic<uint64_t> hand_left_trace_seq_{0};
+    std::atomic<uint64_t> hand_right_trace_seq_{0};
+    uint64_t last_lowcmd_publish_us_ = 0;
+    uint64_t last_hand_left_publish_us_ = 0;
+    uint64_t last_hand_right_publish_us_ = 0;
+    uint32_t last_lowstate_tick_logged_ = 0;
 };

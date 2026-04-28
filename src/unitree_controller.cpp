@@ -2,6 +2,10 @@
 #include <stdexcept>
 #include <cstddef>
 #include <iostream>
+#include <chrono>
+#include <cstdlib>
+#include <sstream>
+#include <iomanip>
 
 using std::size_t;
 
@@ -35,6 +39,8 @@ UnitreeController::UnitreeController(const UnitreeConfig& cfg)
       num_dofs_(cfg.num_dofs),
       mode_pr_(Mode::PR),
       mode_machine_(0) {
+    InitTraceLogger();
+
     if (cfg.hand_type == "Dex-3") {
         num_dofs_hand_ = 7;
     } else if (cfg.hand_type == "NONE") {
@@ -92,6 +98,176 @@ UnitreeController::UnitreeController(const UnitreeConfig& cfg)
 }
 
 UnitreeController::~UnitreeController() {
+    if (trace_stream_.is_open()) {
+        trace_stream_.flush();
+        trace_stream_.close();
+    }
+}
+
+bool UnitreeController::IsTraceEnabled() const {
+    return trace_enabled_ && trace_stream_.is_open();
+}
+
+uint64_t UnitreeController::NowSteadyUs() const {
+    const auto now = std::chrono::steady_clock::now();
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count());
+}
+
+uint64_t UnitreeController::NextTraceSeq(std::atomic<uint64_t>& seq) {
+    return seq.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+
+bool UnitreeController::ShouldLogBySampling(uint64_t seq) const {
+    return trace_sampling_ratio_ <= 1 || (seq % trace_sampling_ratio_) == 0;
+}
+
+void UnitreeController::InitTraceLogger() {
+    const char* enable_env = std::getenv("UNITREE_CPP_TRACE_ENABLE");
+    if (enable_env != nullptr) {
+        const std::string v(enable_env);
+        trace_enabled_ = !(v == "0" || v == "false" || v == "FALSE" || v == "off" || v == "OFF");
+    }
+    if (!trace_enabled_) {
+        return;
+    }
+
+    const char* path_env = std::getenv("UNITREE_CPP_TRACE_FILE");
+    trace_file_path_ = (path_env != nullptr && path_env[0] != '\0') ? std::string(path_env) : "/tmp/unitree_cpp_lowcmd_trace.jsonl";
+
+    const char* flush_env = std::getenv("UNITREE_CPP_TRACE_FLUSH");
+    if (flush_env != nullptr) {
+        const std::string v(flush_env);
+        trace_flush_each_write_ = !(v == "0" || v == "false" || v == "FALSE" || v == "off" || v == "OFF");
+    }
+
+    const char* sampling_env = std::getenv("UNITREE_CPP_TRACE_SAMPLE");
+    if (sampling_env != nullptr) {
+        try {
+            const uint32_t sample = static_cast<uint32_t>(std::stoul(sampling_env));
+            trace_sampling_ratio_ = (sample == 0) ? 1 : sample;
+        } catch (...) {
+            trace_sampling_ratio_ = 1;
+        }
+    }
+
+    trace_stream_.open(trace_file_path_, std::ios::out | std::ios::app);
+    if (!trace_stream_.is_open()) {
+        trace_enabled_ = false;
+        std::cerr << "Failed to open UNITREE_CPP trace file: " << trace_file_path_ << std::endl;
+        return;
+    }
+
+    std::cout << "UNITREE_CPP command tracing enabled -> " << trace_file_path_
+              << " (sample=" << trace_sampling_ratio_
+              << ", flush=" << (trace_flush_each_write_ ? "1" : "0") << ")" << std::endl;
+}
+
+void UnitreeController::TraceLine(const std::string& line) {
+    if (!IsTraceEnabled()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(trace_mutex_);
+    trace_stream_ << line << '\n';
+    if (trace_flush_each_write_) {
+        trace_stream_.flush();
+    }
+}
+
+void UnitreeController::TraceLowCmdPublish(const LowCmd_& cmd, uint64_t now_us, uint64_t dt_us) {
+    const uint64_t seq = NextTraceSeq(lowcmd_trace_seq_);
+    if (!ShouldLogBySampling(seq)) {
+        return;
+    }
+
+    uint32_t lowstate_tick = 0;
+    uint32_t lowstate_tick_dt = 0;
+    if (const std::shared_ptr<const RobotState> rs = robot_state_buffer_.GetData(); rs) {
+        lowstate_tick = rs->tick;
+        if (last_lowstate_tick_logged_ != 0 && lowstate_tick >= last_lowstate_tick_logged_) {
+            lowstate_tick_dt = lowstate_tick - last_lowstate_tick_logged_;
+        }
+        last_lowstate_tick_logged_ = lowstate_tick;
+    }
+    const uint64_t target_dt_us = static_cast<uint64_t>(cfg_.control_dt * 1e6);
+    const bool dt_out_of_band = dt_us > 0 && (dt_us > target_dt_us * 2 || dt_us < target_dt_us / 2);
+
+    std::ostringstream oss;
+    oss << "{\"stream\":\"lowcmd\""
+        << ",\"seq\":" << seq
+        << ",\"mono_us\":" << now_us
+        << ",\"publish_dt_us\":" << dt_us
+        << ",\"control_dt_us\":" << target_dt_us
+        << ",\"dt_out_of_band\":" << (dt_out_of_band ? "true" : "false")
+        << ",\"lowstate_tick\":" << lowstate_tick
+        << ",\"lowstate_tick_dt\":" << lowstate_tick_dt
+        << ",\"mode_pr\":" << static_cast<uint32_t>(cmd.mode_pr())
+        << ",\"mode_machine\":" << static_cast<uint32_t>(cmd.mode_machine())
+        << ",\"control_mode\":\"";
+    switch (cfg_.control_mode) {
+        case ControlMode::POSITION:
+            oss << "position";
+            break;
+        case ControlMode::VELOCITY:
+            oss << "velocity";
+            break;
+        case ControlMode::TORQUE:
+            oss << "torque";
+            break;
+        default:
+            oss << "unknown";
+            break;
+    }
+    oss << "\""
+        << ",\"crc\":" << cmd.crc()
+        << ",\"motors\":[";
+
+    const auto& motors = cmd.motor_cmd();
+    for (size_t i = 0; i < num_dofs_; ++i) {
+        const auto& m = motors.at(i);
+        if (i > 0) oss << ",";
+        oss << "{\"i\":" << i
+            << ",\"mode\":" << static_cast<uint32_t>(m.mode())
+            << ",\"q\":" << std::setprecision(9) << m.q()
+            << ",\"dq\":" << std::setprecision(9) << m.dq()
+            << ",\"tau\":" << std::setprecision(9) << m.tau()
+            << ",\"kp\":" << std::setprecision(9) << m.kp()
+            << ",\"kd\":" << std::setprecision(9) << m.kd()
+            << "}";
+    }
+    oss << "]}";
+    TraceLine(oss.str());
+}
+
+void UnitreeController::TraceHandCmdPublish(const char* side, const HandCmd_& cmd, uint64_t now_us, uint64_t dt_us) {
+    std::atomic<uint64_t>* seq_ptr = (std::string(side) == "left") ? &hand_left_trace_seq_ : &hand_right_trace_seq_;
+    const uint64_t seq = NextTraceSeq(*seq_ptr);
+    if (!ShouldLogBySampling(seq)) {
+        return;
+    }
+
+    std::ostringstream oss;
+    oss << "{\"stream\":\"handcmd\""
+        << ",\"side\":\"" << side << "\""
+        << ",\"seq\":" << seq
+        << ",\"mono_us\":" << now_us
+        << ",\"publish_dt_us\":" << dt_us
+        << ",\"motors\":[";
+
+    const auto& motors = cmd.motor_cmd();
+    for (size_t i = 0; i < motors.size(); ++i) {
+        const auto& m = motors.at(i);
+        if (i > 0) oss << ",";
+        oss << "{\"i\":" << i
+            << ",\"mode\":" << static_cast<uint32_t>(m.mode())
+            << ",\"q\":" << std::setprecision(9) << m.q()
+            << ",\"dq\":" << std::setprecision(9) << m.dq()
+            << ",\"tau\":" << std::setprecision(9) << m.tau()
+            << ",\"kp\":" << std::setprecision(9) << m.kp()
+            << ",\"kd\":" << std::setprecision(9) << m.kd()
+            << "}";
+    }
+    oss << "]}";
+    TraceLine(oss.str());
 }
 
 bool UnitreeController::self_check() {
@@ -194,7 +370,11 @@ void UnitreeController::LowCommandWriter() {
         }
 
         dds_low_command.crc() = Crc32Core((uint32_t*)&dds_low_command, (sizeof(dds_low_command) >> 2) - 1);
+        const uint64_t now_us = NowSteadyUs();
+        const uint64_t dt_us = (last_lowcmd_publish_us_ == 0) ? 0 : (now_us - last_lowcmd_publish_us_);
+        TraceLowCmdPublish(dds_low_command, now_us, dt_us);
         lowcmd_publisher_->Write(dds_low_command);
+        last_lowcmd_publish_us_ = now_us;
     }
 }
 
@@ -215,7 +395,11 @@ void UnitreeController::HandCommandWriter() {
             dds_hand_command.motor_cmd().at(i).kd() = hc_l->kd.at(i);
         }
 
+        const uint64_t now_us = NowSteadyUs();
+        const uint64_t dt_us = (last_hand_left_publish_us_ == 0) ? 0 : (now_us - last_hand_left_publish_us_);
+        TraceHandCmdPublish("left", dds_hand_command, now_us, dt_us);
         handcmd_left_publisher_->Write(dds_hand_command);
+        last_hand_left_publish_us_ = now_us;
     }
     const std::shared_ptr<const HandCommand> hc_r = hand_command_right_buffer_.GetData();
     if (hc_r) {
@@ -229,7 +413,11 @@ void UnitreeController::HandCommandWriter() {
             dds_hand_command.motor_cmd().at(i).kd() = hc_r->kd.at(i);
         }
 
+        const uint64_t now_us = NowSteadyUs();
+        const uint64_t dt_us = (last_hand_right_publish_us_ == 0) ? 0 : (now_us - last_hand_right_publish_us_);
+        TraceHandCmdPublish("right", dds_hand_command, now_us, dt_us);
         handcmd_right_publisher_->Write(dds_hand_command);
+        last_hand_right_publish_us_ = now_us;
     }
 }
 
